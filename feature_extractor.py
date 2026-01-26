@@ -154,5 +154,6 @@ def get_url_entropy(url):
 
 final_df['url_entropy'] = final_df['url'].apply(get_url_entropy)
 
+final_df = final_df.drop(columns=['url'])
+final_df.to_csv('Phishing URL dataset/features.csv')
 
-print(final_df)
