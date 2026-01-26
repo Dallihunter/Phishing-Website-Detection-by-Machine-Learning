@@ -1,1 +1,1 @@
-# Phishing-Website-Detection-by-Machine-Learning
+# Phishing Website Detection by Machine Learning
