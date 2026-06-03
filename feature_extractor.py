@@ -6,6 +6,8 @@ from collections import Counter
 import math
 
 
+# The first Dataset file in CSV format
+
 df1 = pd.read_csv('Phishing URL dataset/PhiUSIIL_Phishing_URL_Dataset.csv')
 df1 = df1.drop(columns=['Domain','URLLength','FILENAME', 'DomainLength', 'IsDomainIP', 'TLD',
        'URLSimilarityIndex', 'CharContinuationRate', 'TLDLegitimateProb',
@@ -24,17 +26,25 @@ df1 = df1.drop(columns=['Domain','URLLength','FILENAME', 'DomainLength', 'IsDoma
 df1['label'] = df1['label'].apply(lambda x: 0 if x == 1  else 1)
 df1 = df1.rename(columns={'URL':'url'}) 
 
+
+# The second Dataset file in CSV format
+
 df2 = pd.read_csv('Phishing URL dataset/Phishing URLs.csv')
 df2['label'] = df2['Type'].apply(lambda x: 1 if x == 'Phishing' else 0)
 df2 = df2.drop(columns='Type') 
+
+# The third Dataset file in CSV format
 
 df3 = pd.read_csv('Phishing URL dataset/URL dataset.csv')
 df3['label'] = df3['type'].apply(lambda x: 1 if x == 'phishing' else 0)
 df3 = df3.drop(columns='type')
 
-final_df = pd.concat([df1 ,df2 , df3])
-# print(final_df['label'].value_counts())
+# concat all 3 files
 
+final_df = pd.concat([df1 ,df2 , df3])
+
+
+# extract Features from final Dataset file
 
 def get_url_length(url):
     if pd.isna(url):
@@ -69,7 +79,6 @@ def get_num_subdomains(url):
         return 0 
 
 final_df['num_subdomains'] = final_df['url'].apply(get_num_subdomains)
-# print(final_df.loc[final_df['num_subdomains'] == 19])
 
 
 def get_num_dots(url):
@@ -81,7 +90,6 @@ def get_num_dots(url):
         return 0
     
 final_df['num_dots'] = final_df['url'].apply(get_num_dots)
-# print(final_df['num_dots'].unique())
 
 
 def has_at_symbol(url):
@@ -103,7 +111,6 @@ def get_uses_https(url):
         return 0
 
 final_df['uses_https'] = final_df['url'].apply(get_uses_https)
-# print(final_df['uses_https'].unique())
 
 
 def has_login_keywords(url):
@@ -114,14 +121,13 @@ def has_login_keywords(url):
     except:
         return 0
 final_df['has_login_keywords'] = final_df['url'].apply(has_login_keywords)
-# print(final_df['has_login_keywords'].unique())
 
 
 def get_num_hyphens(url):
     if pd.isna(url):
         return 0
     try:
-        return url.count('-')  # یا hostname فقط: urlparse(url).netloc.count('-')
+        return url.count('-')  # یا hostname only: urlparse(url).netloc.count('-')
     except:
         return 0
 
@@ -133,7 +139,7 @@ def has_ip_address(url):
         return 0
     try:
         hostname = urlparse(url).netloc
-        # regex برای IPv4
+        # regex for IPv4
         ip_pattern = r'^\d{1,3}(\.\d{1,3}){3}$'
         return 1 if re.match(ip_pattern, hostname) else 0
     except:
