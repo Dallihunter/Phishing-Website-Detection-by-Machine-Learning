@@ -109,6 +109,23 @@ def get_url_entropy(url):
     except:
         return 0
 
+def get_has_at_symbol(url):
+    """تکنیک فریب: http://user@evil.com مرورگر به evil.com میره"""
+    if pd.isna(url):
+        return 0
+    return 1 if '@' in url else 0
+
+
+def get_has_ip_address(url):
+    """هیچ سایت معتبری از IP مستقیم استفاده نمی‌کنه"""
+    if pd.isna(url):
+        return 0
+    try:
+        hostname = urlparse(url).netloc
+        ip_pattern = r'^\d{1,3}(\.\d{1,3}){3}$'
+        return 1 if re.match(ip_pattern, hostname) else 0
+    except:
+        return 0
 
 # ─────────────────────────────────────────
 #  Feature functions — new
@@ -180,6 +197,8 @@ if __name__ == '__main__':
     df['has_login_keywords'] = df['url'].apply(get_has_login_keywords)
     df['num_hyphens']        = df['url'].apply(get_num_hyphens)
     df['url_entropy']        = df['url'].apply(get_url_entropy)
+    df['has_at_symbol']      = df['url'].apply(get_has_at_symbol)
+    df['has_ip_address']     = df['url'].apply(get_has_ip_address)
 
     # new features
     df['path_length']           = df['url'].apply(get_path_length)
