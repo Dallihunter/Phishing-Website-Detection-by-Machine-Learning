@@ -85,8 +85,8 @@ phishing-url-detector/
 
 **1 — Clone the repo**
 ```bash
-git clone https://github.com/yourusername/phishing-url-detector.git
-cd phishing-url-detector
+git clone https://github.com/Dallihunter/Phishing-Website-Detection-by-Machine-Learning.git
+cd Phishing-Website-Detection-by-Machine-Learning
 ```
 
 **2 — Create a virtual environment**
