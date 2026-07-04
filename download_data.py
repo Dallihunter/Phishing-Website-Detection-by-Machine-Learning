@@ -10,9 +10,10 @@ import urllib.request
 DATA_DIR = Path(__file__).resolve().parent / "Phishing URL dataset"
 
 FILES = {
-    "phiusiil.zip": "https://archive.ics.uci.edu/static/public/967/phiusiil+phishing+url+dataset.zip",
+    
     "Phishing URLs.csv": "https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/97e4b9fc-8c55-4579-ae80-d30740d00913/file_downloaded",
     "URL dataset.csv": "https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/f0de314f-ea72-4385-9faa-f06593bb0a2d/file_downloaded",
+    "phiusiil.zip": "https://archive.ics.uci.edu/static/public/967/phiusiil+phishing+url+dataset.zip"
 }
 
 
