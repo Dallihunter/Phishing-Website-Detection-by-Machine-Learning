@@ -148,8 +148,8 @@ Enter URL: http://paypal-verify.login.ru/secure/account/confirm
 Three public datasets were merged for a total of **740,778 URLs** (480,588 legitimate / 260,190 phishing):
 
 - [PhiUSIIL Phishing URL Dataset](https://archive.ics.uci.edu/dataset/967/phiusiil+phishing+url+dataset)
-- Phishing URLs.csv ([Mendeley Data](https://data.mendeley.com))
-- URL dataset.csv ([Mendeley Data](https://data.mendeley.com))
+- [Phishing URLs.csv](https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/97e4b9fc-8c55-4579-ae80-d30740d00913/file_downloaded)
+- [URL dataset.csv](https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/f0de314f-ea72-4385-9faa-f06593bb0a2d/file_downloaded)
 
 All three are downloaded automatically by `download_data.py`.
 
