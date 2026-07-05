@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/db873665-3a8e-46a0-a8d3-340c920157b1
-
 # 🔍 Phishing URL Detector
 
 A machine learning project that detects phishing URLs using a Random Forest classifier trained on 740,000+ real-world URLs.
@@ -146,6 +142,8 @@ Enter URL: http://paypal-verify.login.ru/secure/account/confirm
 ```
 
 ---
+
+https://github.com/user-attachments/assets/db873665-3a8e-46a0-a8d3-340c920157b1
 
 ## Dataset
 
