@@ -60,7 +60,7 @@ Random Forest classifier  (200 decision trees, depth-limited)
 ```
 phishing-url-detector/
 │
-├── main.py                    # Entry point — interactive URL checker
+├── main.py                    # Entry point — CLI (interactive, single URL, batch, JSON)
 ├── predict.py                 # Prediction pipeline & feature extraction (inference)
 ├── feature_extractor.py       # Builds the feature dataset from raw CSVs (training)
 ├── train_model.py             # Trains and evaluates both models
@@ -119,10 +119,30 @@ python3 train_model.py
 This trains both models and saves `rf_phishing_model.pkl`, `lr_phishing_model.pkl`, and `scaler.pkl` in the project root.
 
 **7 — Run the detector**
+
+The CLI supports four modes:
+
 ```bash
+# Interactive mode — type URLs one at a time
 python3 main.py
+
+# Check a single URL
+python3 main.py --url https://example.com
+
+# Check a single URL, output as JSON (useful for scripts/automation)
+python3 main.py --url https://example.com --json
+
+# Batch-check a list of URLs from a file (one URL per line)
+python3 main.py --file urls.txt
+
+# Batch-check + JSON output
+python3 main.py --file urls.txt --json
+
+# Full usage help
+python3 main.py --help
 ```
 
+**Interactive mode example:**
 ```
 🔍 Phishing URL Detector
 Type a URL to check, or 'q' to quit.
@@ -131,27 +151,42 @@ Loading model... Ready!
 
 Enter URL: http://paypal-verify.login.ru/secure/account/confirm
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🚨  PHISHING  —  100.0% confidence
+─────────────────────────────────────────────
+🚨 PHISHING  —  100.0% confidence
 
   Why:
     • no HTTPS — connection is not encrypted
     • contains suspicious words (verify, secure, confirm...)
     • contains login keyword in URL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────────────────────────
 ```
 
----
-
+**JSON output example:**
+```bash
+$ python3 main.py --url https://paypal-verify.login.ru/secure --json
+```
+```json
+{
+  "url": "http://paypal-verify.login.ru/secure",
+  "verdict": "phishing",
+  "confidence": 1.0,
+  "reasons": [
+    "no HTTPS — connection is not encrypted",
+    "contains suspicious words (verify, secure, confirm...)"
+  ]
+}
+```
 https://github.com/user-attachments/assets/db873665-3a8e-46a0-a8d3-340c920157b1
+
+---
 
 ## Dataset
 
 Three public datasets were merged for a total of **740,778 URLs** (480,588 legitimate / 260,190 phishing):
 
 - [PhiUSIIL Phishing URL Dataset](https://archive.ics.uci.edu/dataset/967/phiusiil+phishing+url+dataset)
-- [Phishing URLs.csv](https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/97e4b9fc-8c55-4579-ae80-d30740d00913/file_downloaded)
-- [URL dataset.csv](https://data.mendeley.com/public-files/datasets/vfszbj9b36/files/f0de314f-ea72-4385-9faa-f06593bb0a2d/file_downloaded)
+- Phishing URLs.csv ([Mendeley Data](https://data.mendeley.com))
+- URL dataset.csv ([Mendeley Data](https://data.mendeley.com))
 
 All three are downloaded automatically by `download_data.py`.
 
@@ -165,6 +200,7 @@ numpy
 scikit-learn
 tldextract
 joblib
+rich
 ```
 
 Install all at once:
@@ -181,10 +217,12 @@ pip install -r requirements.txt
 - The model is trained on URL structure only — it does not fetch or analyze page content.
 - Highly obfuscated or newly registered phishing domains may evade detection.
 
-### Future Work
-- **WHOIS-based domain age feature**: Newly registered domains are strongly correlated with phishing. Adding domain age via WHOIS lookups would likely be a more reliable signal than URL-string-only features, and could help correct the short-URL false-positive bias above.
-- Investigate and rebalance training data with respect to URL/path length across classes.
-- Expand the trusted domain whitelist.
+### Roadmap
+- **Web API** (FastAPI) to serve predictions over HTTP — foundation for a browser extension and web demo
+- **Browser extension** that warns users in real time when visiting a suspected phishing site
+- **WHOIS-based domain age feature**: newly registered domains are strongly correlated with phishing, and could help correct the short-URL false-positive bias above
+- Investigate and rebalance training data with respect to URL/path length across classes
+- Expanded trusted domain whitelist
 
 ---
 
