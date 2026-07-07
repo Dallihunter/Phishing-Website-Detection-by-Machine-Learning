@@ -4,3 +4,4 @@ numpy
 scikit-learn
 tldextract
 joblib
+rich
