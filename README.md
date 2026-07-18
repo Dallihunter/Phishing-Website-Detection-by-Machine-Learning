@@ -39,11 +39,13 @@ Random Forest classifier  (200 decision trees, depth-limited)
 |---|---|
 | `url_length` | Total length of the URL |
 | `hostname_length` | Length of the domain name |
-| `num_subdomains` | Number of subdomains |
-| `num_dots` | Number of dots in the URL |
+| `num_subdomains` | Number of subdomains (excludes `www` as a non-signal alias) |
+| `num_dots` | Number of dots in the URL (excludes leading `www.`) |
 | `uses_https` | Whether the URL uses HTTPS |
-| `has_login_keywords` | Presence of "login" in the URL |
-| `num_hyphens` | Number of hyphens |
+| `has_login_keywords` | Presence of "login" in the hostname (e.g. `login.ru`) — spoofing signal |
+| `has_login_path` | Presence of a `/login` path segment — normal for real auth endpoints |
+| `hostname_hyphens` | Number of hyphens in the domain — brand-spoofing signal |
+| `path_hyphens` | Number of hyphens in the path — normal for SEO slugs, weak signal |
 | `url_entropy` | Shannon entropy — high entropy suggests random/obfuscated URLs |
 | `has_at_symbol` | Presence of `@` — classic redirect trick |
 | `has_ip_address` | Whether the hostname is a raw IP address |
@@ -212,7 +214,7 @@ pip install -r requirements.txt
 
 ## Limitations
 
-- **Short, path-less URLs may be misclassified.** The model was observed to sometimes flag simple, legitimate URLs (e.g. bare domains with short paths, especially with uncommon TLDs like `.ai` or `.ir`) as phishing. This appears to stem from a structural bias in the training data, where phishing samples are often collected as bare landing-page URLs, while legitimate samples tend to include longer paths. This is a known limitation, not a code bug.
+- **Short bare-domain bias**: URLs with very short hostnames (~8-15 chars) and minimal/no path (e.g. `https://example.com`) can still be misclassified as phishing with moderate-to-high confidence. Root cause: the training data has too few short, legitimate bare-domain examples relative to phishing samples in that same size range, so the Random Forest's decision boundary is unstable there. This is a training-data composition issue, not a feature-formula bug — two related feature bugs (`num_dots` and `num_subdomains` both over-counting `www.` as a phishing-relevant signal) were identified and fixed, which resolved most — but not all — of the false positives in this category.
 - The whitelist covers only 20 well-known domains. Legitimate sites not on the whitelist may occasionally be flagged as phishing.
 - The model is trained on URL structure only — it does not fetch or analyze page content.
 - Highly obfuscated or newly registered phishing domains may evade detection.
