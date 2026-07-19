@@ -6,6 +6,7 @@ import tldextract
 import re
 from collections import Counter
 import math
+from whois_lookup import get_domain_age_days, FAILED_LOOKUP_AGE
 
 
 # ─────────────────────────────────────────
@@ -19,7 +20,12 @@ TRUSTED_DOMAINS = {
     'instagram.com', 'netflix.com', 'spotify.com', 'dropbox.com',
     'adobe.com', 'cloudflare.com', 'gitlab.com', 'python.org',
 }
-
+def get_registrable_domain(url: str) -> str:
+    try:
+        ext = tldextract.extract(url)
+        return f"{ext.domain}.{ext.suffix}"
+    except:
+        return ""
 
 def is_trusted_domain(url: str) -> bool:
     try:
@@ -237,11 +243,17 @@ def classify_url(url: str, model, scaler) -> dict:
     confidence_pct = round(float(confidence[1] if prediction == 1 else confidence[0]), 4)
     reasons = explain(features) if prediction == 1 else []
 
+    domain = get_registrable_domain(url)
+    age_days = get_domain_age_days(domain) if domain else FAILED_LOOKUP_AGE
+    if age_days != FAILED_LOOKUP_AGE and age_days < 180:
+        reasons.append(f"domain registered recently (~{age_days} days ago)")
+
     return {
         "url": url,
         "verdict": verdict,
         "confidence": confidence_pct,
         "reasons": reasons,
+        "domain_age_days": age_days,
     }
 
 # ─────────────────────────────────────────
