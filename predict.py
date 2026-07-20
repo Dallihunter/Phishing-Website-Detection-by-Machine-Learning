@@ -7,7 +7,8 @@ import re
 from collections import Counter
 import math
 from whois_lookup import get_domain_age_days, FAILED_LOOKUP_AGE
-
+from features import extract_features
+from calibration import apply_domain_age_calibration
 
 # ─────────────────────────────────────────
 #  Trusted domains whitelist
@@ -45,105 +46,6 @@ def load_artifacts():
     scaler = joblib.load('scaler.pkl')
     return rf, scaler
 
-
-# ─────────────────────────────────────────
-#  Feature extraction (same as training)
-# ─────────────────────────────────────────
-
-def extract_features(url: str) -> dict:
-    def url_length(u):
-        return len(u)
-
-    def hostname_length(u):
-        try: return len(urlparse(u).netloc)
-        except: return 0
-
-    def num_subdomains(u):
-        try:
-            sub = tldextract.extract(u).subdomain
-            return 0 if sub == '' else sub.count('.') + 1
-        except: return 0
-
-    def num_dots(u):
-        return u.count('.')
-
-    def uses_https(u):
-        return 1 if u.startswith('https://') else 0
-
-    def has_login_keywords(u):
-        try: return 1 if 'login' in urlparse(u).netloc.lower() else 0
-        except: return 0
-
-    def has_login_path(u):
-        try:
-            segments = urlparse(u).path.lower().split('/')
-            return 1 if any(s in ('login', 'signin', 'sign-in') for s in segments) else 0
-        except: return 0
-
-    def hostname_hyphens(u):
-        try: return urlparse(u).netloc.count('-')
-        except: return 0
-
-    def path_hyphens(u):
-        try: return urlparse(u).path.count('-')
-        except: return 0
-
-    def url_entropy(u):
-        if u == '': return 0
-        counts = Counter(u)
-        total  = len(u)
-        return -sum((c/total) * math.log2(c/total) for c in counts.values())
-
-    def has_at_symbol(u):
-        return 1 if '@' in u else 0
-
-    def has_ip_address(u):
-        try:
-            hostname = urlparse(u).netloc
-            return 1 if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', hostname) else 0
-        except: return 0
-
-    def path_length(u):
-        try: return len(urlparse(u).path)
-        except: return 0
-
-    def num_special_chars(u):
-        return sum(u.count(c) for c in ['%', '=', '?', '&', '#', '+'])
-
-    def digit_ratio(u):
-        if len(u) == 0: return 0
-        return round(sum(1 for c in u if c.isdigit()) / len(u), 4)
-
-    def has_port(u):
-        try:
-            port = urlparse(u).port
-            return 1 if port and port not in (80, 443) else 0
-        except: return 0
-
-    def has_suspicious_words(u):
-        words = ['secure', 'verify', 'update', 'confirm', 'account',
-                 'banking', 'signin', 'webscr', 'ebayisapi', 'paypal']
-        return 1 if any(w in u.lower() for w in words) else 0
-
-    return {
-        'url_length':           url_length(url),
-        'hostname_length':      hostname_length(url),
-        'num_subdomains':       num_subdomains(url),
-        'num_dots':             num_dots(url),
-        'uses_https':           uses_https(url),
-        'has_login_keywords':   has_login_keywords(url),
-        'has_login_path':       has_login_path(url),
-        'hostname_hyphens':     hostname_hyphens(url),
-        'path_hyphens':         path_hyphens(url),
-        'url_entropy':          url_entropy(url),
-        'has_at_symbol':        has_at_symbol(url),
-        'has_ip_address':       has_ip_address(url),
-        'path_length':          path_length(url),
-        'num_special_chars':    num_special_chars(url),
-        'digit_ratio':          digit_ratio(url),
-        'has_port':             has_port(url),
-        'has_suspicious_words': has_suspicious_words(url),
-    }
 
 
 # ─────────────────────────────────────────
@@ -223,7 +125,6 @@ def predict(url: str, model, scaler) -> None:
     print(border)
 
 def classify_url(url: str, model, scaler) -> dict:
-    """Returns a structured result dict — used by both CLI and JSON output modes."""
     if is_trusted_domain(url):
         return {
             "url": url,
@@ -236,16 +137,24 @@ def classify_url(url: str, model, scaler) -> dict:
     X = pd.DataFrame([features])
     X_scaled = scaler.transform(X)
 
-    prediction = model.predict(X_scaled)[0]
-    confidence = model.predict_proba(X_scaled)[0]
-
-    verdict = "phishing" if prediction == 1 else "legitimate"
-    confidence_pct = round(float(confidence[1] if prediction == 1 else confidence[0]), 4)
-    reasons = explain(features) if prediction == 1 else []
+    raw_confidence = model.predict_proba(X_scaled)[0]
+    raw_phishing_prob = float(raw_confidence[1])
 
     domain = get_registrable_domain(url)
     age_days = get_domain_age_days(domain) if domain else FAILED_LOOKUP_AGE
-    if age_days != FAILED_LOOKUP_AGE and age_days < 180:
+
+    phishing_prob, was_calibrated = apply_domain_age_calibration(raw_phishing_prob, age_days)
+
+    verdict = "phishing" if phishing_prob >= 0.5 else "legitimate"
+    confidence_pct = round(phishing_prob if verdict == "phishing" else 1 - phishing_prob, 4)
+    reasons = explain(features) if verdict == "phishing" else []
+
+    if was_calibrated and verdict == "phishing":
+        reasons.append(
+            f"long-established domain (~{age_days} days) partially offset the model's "
+            f"raw score ({round(raw_phishing_prob * 100, 1)}% \u2192 {round(phishing_prob * 100, 1)}%)"
+        )
+    elif age_days != FAILED_LOOKUP_AGE and age_days < 180 and verdict == "phishing":
         reasons.append(f"domain registered recently (~{age_days} days ago)")
 
     return {
