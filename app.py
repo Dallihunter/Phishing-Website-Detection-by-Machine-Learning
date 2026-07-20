@@ -8,18 +8,25 @@ Then test:
     curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d '{"url": "https://example.com"}'
 """
 
-from urllib.parse import urlparse
 
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
 from predict import load_artifacts, classify_url
+from fastapi.staticfiles import StaticFiles
+
+
+
 
 app = FastAPI(
     title="Phishing URL Detector API",
     description="Classifies a URL as phishing or legitimate.",
     version="1.2.0",
 )
+
+
+
+
 
 # Loaded once at startup — NOT per-request. Loading a pickle on every
 # request would be slow and wasteful; the model/scaler are stateless
@@ -79,3 +86,6 @@ def predict(payload: URLRequest):
         raise HTTPException(status_code=400, detail="Failed to process this URL")
 
     return result
+
+# serve the frontend at "/" — place index.html in a "static" folder next to app.py
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
