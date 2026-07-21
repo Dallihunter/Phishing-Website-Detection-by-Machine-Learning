@@ -9,6 +9,7 @@ import math
 from whois_lookup import get_domain_age_days, FAILED_LOOKUP_AGE
 from features import extract_features
 from calibration import apply_domain_age_calibration
+from signals import get_structured_signals, compute_severity
 
 # ─────────────────────────────────────────
 #  Trusted domains whitelist
@@ -82,7 +83,56 @@ def explain(features: dict) -> list:
 
 
 # ─────────────────────────────────────────
-#  Main predict function
+#  Shared pipeline — single source of truth for both classify_url()
+#  (legacy shape, used by main.py / /predict) and classify_url_v1()
+#  (severity + signal codes, used by /v1/detect). Do not reimplement
+#  this logic in either caller — that's exactly the kind of drift
+#  that caused the v1.1.1 num_dots/num_subdomains bug.
+# ─────────────────────────────────────────
+
+def _classify_url_full(url: str, model, scaler, include_whois: bool = True) -> dict:
+    if is_trusted_domain(url):
+        return {
+            "url": url,
+            "is_whitelisted": True,
+            "verdict": "legitimate",
+            "phishing_prob": 0.0,
+            "raw_phishing_prob": 0.0,
+            "was_calibrated": False,
+            "features": None,
+            "age_days": None,
+        }
+
+    features = extract_features(url)
+    X = pd.DataFrame([features])
+    X_scaled = scaler.transform(X)
+
+    raw_confidence = model.predict_proba(X_scaled)[0]
+    raw_phishing_prob = float(raw_confidence[1])
+
+    domain = get_registrable_domain(url)
+    if include_whois and domain:
+        age_days = get_domain_age_days(domain)
+    else:
+        age_days = FAILED_LOOKUP_AGE
+
+    phishing_prob, was_calibrated = apply_domain_age_calibration(raw_phishing_prob, age_days)
+    verdict = "phishing" if phishing_prob >= 0.5 else "legitimate"
+
+    return {
+        "url": url,
+        "is_whitelisted": False,
+        "verdict": verdict,
+        "phishing_prob": phishing_prob,
+        "raw_phishing_prob": raw_phishing_prob,
+        "was_calibrated": was_calibrated,
+        "features": features,
+        "age_days": age_days,
+    }
+
+
+# ─────────────────────────────────────────
+#  Main predict function (CLI verbose printer)
 # ─────────────────────────────────────────
 
 def predict(url: str, model, scaler) -> None:
@@ -124,8 +174,14 @@ def predict(url: str, model, scaler) -> None:
         print(f"    {k:<25} {v}")
     print(border)
 
+
 def classify_url(url: str, model, scaler) -> dict:
-    if is_trusted_domain(url):
+    """Legacy shape — used by main.py and the /predict endpoint.
+    Behavior is unchanged from before the refactor; it now just reads
+    off _classify_url_full() instead of duplicating the pipeline."""
+    r = _classify_url_full(url, model, scaler, include_whois=True)
+
+    if r["is_whitelisted"]:
         return {
             "url": url,
             "verdict": "legitimate",
@@ -133,23 +189,16 @@ def classify_url(url: str, model, scaler) -> dict:
             "reasons": ["trusted domain (whitelist)"],
         }
 
-    features = extract_features(url)
-    X = pd.DataFrame([features])
-    X_scaled = scaler.transform(X)
+    verdict = r["verdict"]
+    phishing_prob = r["phishing_prob"]
+    raw_phishing_prob = r["raw_phishing_prob"]
+    age_days = r["age_days"]
+    features = r["features"]
 
-    raw_confidence = model.predict_proba(X_scaled)[0]
-    raw_phishing_prob = float(raw_confidence[1])
-
-    domain = get_registrable_domain(url)
-    age_days = get_domain_age_days(domain) if domain else FAILED_LOOKUP_AGE
-
-    phishing_prob, was_calibrated = apply_domain_age_calibration(raw_phishing_prob, age_days)
-
-    verdict = "phishing" if phishing_prob >= 0.5 else "legitimate"
     confidence_pct = round(phishing_prob if verdict == "phishing" else 1 - phishing_prob, 4)
     reasons = explain(features) if verdict == "phishing" else []
 
-    if was_calibrated and verdict == "phishing":
+    if r["was_calibrated"] and verdict == "phishing":
         reasons.append(
             f"long-established domain (~{age_days} days) partially offset the model's "
             f"raw score ({round(raw_phishing_prob * 100, 1)}% \u2192 {round(phishing_prob * 100, 1)}%)"
@@ -162,6 +211,50 @@ def classify_url(url: str, model, scaler) -> dict:
         "verdict": verdict,
         "confidence": confidence_pct,
         "reasons": reasons,
+        "domain_age_days": age_days,
+    }
+
+
+def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict:
+    """SOC-facing shape (API.md) — severity tier + stable signal
+    codes instead of a bare confidence float and free-text reasons.
+    Used by the /v1/detect endpoint."""
+    r = _classify_url_full(url, model, scaler, include_whois=include_whois)
+
+    if r["is_whitelisted"]:
+        return {
+            "verdict": "clean",
+            "severity": "clean",
+            "confidence": 1.0,
+            "signals": [{
+                "code": "WHITELISTED_DOMAIN",
+                "description": "domain is in trusted whitelist",
+            }],
+            "domain_age_days": None,
+        }
+
+    features = r["features"]
+    phishing_verdict = r["verdict"]  # "phishing" | "legitimate"
+    phishing_prob = r["phishing_prob"]
+    confidence = round(phishing_prob if phishing_verdict == "phishing" else 1 - phishing_prob, 4)
+
+    # age_days is only meaningful (and only surfaced) if WHOIS was requested
+    age_days = r["age_days"] if include_whois else None
+
+    signals = get_structured_signals(
+        features,
+        age_days=age_days,
+        was_calibrated=r["was_calibrated"],
+        raw_phishing_prob=r["raw_phishing_prob"],
+        phishing_prob=phishing_prob,
+    )
+    severity = compute_severity(phishing_verdict, phishing_prob, features)
+
+    return {
+        "verdict": "malicious" if phishing_verdict == "phishing" else "clean",
+        "severity": severity,
+        "confidence": confidence,
+        "signals": signals,
         "domain_age_days": age_days,
     }
 
