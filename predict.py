@@ -6,10 +6,12 @@ import tldextract
 import re
 from collections import Counter
 import math
+import asyncio
 from whois_lookup import get_domain_age_days, FAILED_LOOKUP_AGE
 from features import extract_features
 from calibration import apply_domain_age_calibration
 from signals import get_structured_signals, compute_severity
+from visual_similarity import check_visual_similarity
 
 # ─────────────────────────────────────────
 #  Trusted domains whitelist
@@ -90,7 +92,14 @@ def explain(features: dict) -> list:
 #  that caused the v1.1.1 num_dots/num_subdomains bug.
 # ─────────────────────────────────────────
 
-def _classify_url_full(url: str, model, scaler, include_whois: bool = True) -> dict:
+def _classify_url_full(
+    url: str,
+    model,
+    scaler,
+    include_whois: bool = True,
+    include_visual_similarity: bool = False,
+    include_screenshot: bool = False,
+) -> dict:
     if is_trusted_domain(url):
         return {
             "url": url,
@@ -101,6 +110,7 @@ def _classify_url_full(url: str, model, scaler, include_whois: bool = True) -> d
             "was_calibrated": False,
             "features": None,
             "age_days": None,
+            "visual_result": None,
         }
 
     features = extract_features(url)
@@ -119,6 +129,20 @@ def _classify_url_full(url: str, model, scaler, include_whois: bool = True) -> d
     phishing_prob, was_calibrated = apply_domain_age_calibration(raw_phishing_prob, age_days)
     verdict = "phishing" if phishing_prob >= 0.5 else "legitimate"
 
+    # Visual similarity is opt-in and expensive (spins up a real browser
+    # render) — only run it when explicitly requested, never as part of
+    # the default fast path. This function itself stays sync (matches
+    # every other caller in this module); asyncio.run() here is safe
+    # because callers of _classify_url_full never run inside an already-
+    # active event loop (main.py is plain sync; app.py's /v1/detect
+    # handler is a sync `def`, which FastAPI runs in its threadpool, not
+    # the event loop thread).
+    visual_result = None
+    if include_visual_similarity:
+        visual_result = asyncio.run(
+            check_visual_similarity(url, include_screenshot=include_screenshot)
+        )
+
     return {
         "url": url,
         "is_whitelisted": False,
@@ -128,6 +152,7 @@ def _classify_url_full(url: str, model, scaler, include_whois: bool = True) -> d
         "was_calibrated": was_calibrated,
         "features": features,
         "age_days": age_days,
+        "visual_result": visual_result,
     }
 
 
@@ -215,11 +240,32 @@ def classify_url(url: str, model, scaler) -> dict:
     }
 
 
-def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict:
+def classify_url_v1(
+    url: str,
+    model,
+    scaler,
+    include_whois: bool = True,
+    include_visual_similarity: bool = False,
+    include_screenshot: bool = False,
+) -> dict:
     """SOC-facing shape (API.md) — severity tier + stable signal
     codes instead of a bare confidence float and free-text reasons.
-    Used by the /v1/detect endpoint."""
-    r = _classify_url_full(url, model, scaler, include_whois=include_whois)
+    Used by the /v1/detect endpoint.
+
+    include_visual_similarity: opt-in, expensive (real headless-browser
+    render) — see visual_similarity.py's SSRF/sandboxing notes before
+    exposing this on a public endpoint without the network-level
+    isolation described there.
+    include_screenshot: only meaningful alongside include_visual_similarity;
+    keeps the raw PNG bytes so the caller can display the rendered page
+    (e.g. in a SOC analyst UI) rather than only seeing a hash/verdict.
+    """
+    r = _classify_url_full(
+        url, model, scaler,
+        include_whois=include_whois,
+        include_visual_similarity=include_visual_similarity,
+        include_screenshot=include_screenshot,
+    )
 
     if r["is_whitelisted"]:
         return {
@@ -231,6 +277,7 @@ def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict
                 "description": "domain is in trusted whitelist",
             }],
             "domain_age_days": None,
+            "screenshot_png": None,
         }
 
     features = r["features"]
@@ -240,6 +287,7 @@ def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict
 
     # age_days is only meaningful (and only surfaced) if WHOIS was requested
     age_days = r["age_days"] if include_whois else None
+    visual_result = r["visual_result"]
 
     signals = get_structured_signals(
         features,
@@ -247,8 +295,9 @@ def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict
         was_calibrated=r["was_calibrated"],
         raw_phishing_prob=r["raw_phishing_prob"],
         phishing_prob=phishing_prob,
+        visual_result=visual_result,
     )
-    severity = compute_severity(phishing_verdict, phishing_prob, features)
+    severity = compute_severity(phishing_verdict, phishing_prob, features, visual_result=visual_result)
 
     return {
         "verdict": "malicious" if phishing_verdict == "phishing" else "clean",
@@ -256,6 +305,7 @@ def classify_url_v1(url: str, model, scaler, include_whois: bool = True) -> dict
         "confidence": confidence,
         "signals": signals,
         "domain_age_days": age_days,
+        "screenshot_png": visual_result.screenshot_png if visual_result else None,
     }
 
 # ─────────────────────────────────────────
