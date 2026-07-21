@@ -11,12 +11,19 @@ This module derives both codes and severity from the exact same
 same failure mode this project already fixed once for num_dots /
 num_subdomains, so we're not reintroducing it here.
 
-Codes implemented match the list in API.md, plus one addition:
-DOMAIN_AGE_OFFSET_APPLIED. API.md's original code list only covered
+Codes implemented match the list in API.md, plus additions:
+DOMAIN_AGE_OFFSET_APPLIED — API.md's original code list only covered
 the "recently registered" young-domain case; it had no code for the
 opposite case calibration.py already handles (an old domain pulling a
-borderline score down). This is a genuine gap in the draft, not a
-deviation from it — flagged so API.md can be updated to match.
+borderline score down).
+
+VISUAL_BRAND_MATCH / VISUAL_CHECK_UNAVAILABLE — API.md reserved
+VISUAL_BRAND_MATCH but the module wasn't built yet; it now is (see
+visual_similarity.py). VISUAL_CHECK_UNAVAILABLE is a new addition,
+same principle as DOMAIN_AGE_UNKNOWN: a failed/skipped check must be
+its own explicit signal, never silently read as "no match found" —
+that would let an attacker bypass the check just by serving a page
+that crashes the renderer or times out.
 """
 
 from whois_lookup import FAILED_LOOKUP_AGE
@@ -49,13 +56,19 @@ def get_structured_signals(
     was_calibrated: bool = False,
     raw_phishing_prob: float = None,
     phishing_prob: float = None,
+    visual_result=None,
 ) -> list:
     """Returns [{"code": ..., "description": ...}, ...] for every
     signal that fired. `age_days=None` means WHOIS wasn't requested
     (options.include_whois=false) — no domain-age signal is emitted,
     distinct from age_days == FAILED_LOOKUP_AGE (lookup was attempted
     and failed), which surfaces as DOMAIN_AGE_UNKNOWN rather than a
-    bare -1 that automation could misread as "brand new"."""
+    bare -1 that automation could misread as "brand new".
+
+    visual_result: a visual_similarity.VisualCheckResult, or None if
+    include_visual_similarity wasn't requested. Same "explicit
+    unavailable, never silent" principle as domain age above.
+    """
     signals = []
 
     if features["has_ip_address"]:
@@ -136,10 +149,26 @@ def get_structured_signals(
                 "description": f"domain registered recently (~{age_days} days ago)",
             })
 
+    # visual-similarity signals — only if that check was requested
+    if visual_result is not None:
+        if not visual_result.checked:
+            signals.append({
+                "code": "VISUAL_CHECK_UNAVAILABLE",
+                "description": f"visual similarity check could not run ({visual_result.unavailable_reason})",
+            })
+        elif visual_result.is_match:
+            signals.append({
+                "code": "VISUAL_BRAND_MATCH",
+                "description": (
+                    f"page visually resembles {visual_result.best_match_brand}'s login page "
+                    f"(hash distance {visual_result.best_match_distance})"
+                ),
+            })
+
     return signals
 
 
-def compute_severity(verdict: str, phishing_prob: float, features: dict) -> str:
+def compute_severity(verdict: str, phishing_prob: float, features: dict, visual_result=None) -> str:
     """
     verdict: "phishing" | "legitimate" (the model's binary call)
     Returns one of: critical, high, medium, low, clean.
@@ -149,8 +178,26 @@ def compute_severity(verdict: str, phishing_prob: float, features: dict) -> str:
     short-bare-domain edge case is capped at "medium" even when
     phishing_prob is high, since that's a documented bias, not a
     confident detection.
+
+    visual_result: a visual_similarity.VisualCheckResult, or None.
+    A confirmed visual brand match is treated as independent, strong
+    evidence of impersonation — it can escalate severity to "critical"
+    even on a domain the structural model scored as legitimate (a
+    convincing visual clone is exactly the case structural URL
+    features alone are blind to), and it overrides the short-bare-
+    domain severity cap, since a visual match is not the kind of
+    uncertainty that cap exists to protect against.
     """
+    visual_match = visual_result is not None and visual_result.checked and visual_result.is_match
+
     if verdict == "legitimate":
+        if visual_match:
+            # Model said "looks structurally fine" but the page is a
+            # visual clone of a real brand's login page — trust the
+            # visual signal here, since structural features can't see
+            # pixel-level impersonation at all.
+            return "critical"
+
         has_weak_signal = any([
             features["has_ip_address"],
             features["has_at_symbol"],
@@ -162,6 +209,9 @@ def compute_severity(verdict: str, phishing_prob: float, features: dict) -> str:
         return "low" if has_weak_signal else "clean"
 
     # verdict == "phishing" from here
+    if visual_match:
+        return "critical"
+
     if is_short_bare_domain_edge_case(features):
         return "medium"
 
