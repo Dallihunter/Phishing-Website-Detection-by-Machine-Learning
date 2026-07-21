@@ -6,9 +6,11 @@ Run locally:
 
 Then test:
     curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d '{"url": "https://example.com"}'
-    curl -X POST http://127.0.0.1:8000/v1/detect -H "Content-Type: application/json" -d '{"url": "https://example.com"}'
+    curl -X POST http://127.0.0.1:8000/v1/detect -H "Content-Type: application/json" -d '{"url": "https://example.com", "options": {"include_visual_similarity": true}}'
 """
 
+import base64
+import logging
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -20,11 +22,14 @@ from pydantic import BaseModel, Field
 
 from predict import load_artifacts, classify_url, classify_url_v1
 
+logger = logging.getLogger("phishing_detector")
+logging.basicConfig(level=logging.INFO)
+
 
 app = FastAPI(
     title="Phishing URL Detector API",
     description="Classifies a URL as phishing or legitimate.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 
@@ -122,6 +127,9 @@ def predict(payload: URLRequest):
     except Exception:
         # Never leak an internal traceback to an API client — convert
         # any unexpected failure into a clean, generic 400 instead.
+        # But DO log it server-side, or every failure looks identical
+        # and undebuggable from the terminal running uvicorn.
+        logger.exception(f"classify_url failed for url={normalized!r}")
         raise HTTPException(status_code=400, detail="Failed to process this URL")
 
     return result
@@ -142,20 +150,28 @@ def detect_v1(payload: DetectRequest):
     if not is_parseable_url(normalized):
         raise DetectAPIError(400, "INVALID_URL", "Could not parse a valid domain from this URL")
 
-    if payload.options.include_visual_similarity:
-        # Reserved per API.md — not built yet. Fail loudly rather than
-        # silently ignoring the flag and returning a result the caller
-        # thinks includes visual-similarity signal but doesn't.
-        raise DetectAPIError(
-            501,
-            "NOT_IMPLEMENTED",
-            "include_visual_similarity is reserved for a future release and is not yet available",
-        )
+    # Visual similarity is opt-in (spins up a real headless-browser
+    # render — see visual_similarity.py's SSRF/sandboxing notes before
+    # exposing this on a public-facing deployment without the network-
+    # level isolation described there). When requested, also fetch the
+    # screenshot bytes so the caller (e.g. a SOC analyst UI) can display
+    # the rendered page rather than only seeing a hash/verdict.
+    include_visual = payload.options.include_visual_similarity
 
     try:
-        result = classify_url_v1(normalized, model, scaler, include_whois=payload.options.include_whois)
+        result = classify_url_v1(
+            normalized, model, scaler,
+            include_whois=payload.options.include_whois,
+            include_visual_similarity=include_visual,
+            include_screenshot=include_visual,
+        )
     except Exception:
+        logger.exception(f"classify_url_v1 failed for url={normalized!r}")
         raise DetectAPIError(500, "INTERNAL_ERROR", "Unexpected failure while processing this URL")
+
+    screenshot_b64 = None
+    if result.get("screenshot_png"):
+        screenshot_b64 = base64.b64encode(result["screenshot_png"]).decode("ascii")
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -165,6 +181,7 @@ def detect_v1(payload: DetectRequest):
         "severity": result["severity"],
         "confidence": result["confidence"],
         "signals": result["signals"],
+        "screenshot_base64": screenshot_b64,
         "metadata": {
             "domain_age_days": result["domain_age_days"],
             "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
